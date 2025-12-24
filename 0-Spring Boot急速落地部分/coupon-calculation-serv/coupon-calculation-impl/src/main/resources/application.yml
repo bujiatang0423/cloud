@@ -8,6 +8,16 @@ spring:
   application:
     name: coupon-calculation-serv
 
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 1.94.123.205:8848
+        heart-beat-interval: 5000
+        heart-beat-timeout: 20000
+        naming-load-cache-at-start: false
+        namespace: public
+        register-enabled: true
+
 logging:
   level:
     com.broadview.coupon: debug

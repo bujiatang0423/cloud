@@ -16,7 +16,15 @@
         <module>coupon-template-api</module>
         <module>coupon-template-dao</module>
         <module>coupon-template-impl</module>
+        <module>coupon-template-feignclient</module>
     </modules>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+        </dependency>
+    </dependencies>
 
     <properties>
         <maven.compiler.source>8</maven.compiler.source>

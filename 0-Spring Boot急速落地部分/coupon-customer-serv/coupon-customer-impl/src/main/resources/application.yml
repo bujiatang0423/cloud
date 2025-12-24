@@ -8,6 +8,8 @@ spring:
   application:
     # 定义项目名称
     name: coupon-customer-serv
+  main:
+    allow-bean-definition-overriding: true # 开启Bean覆盖
   datasource:
     # mysql数据源
     username: root
@@ -33,7 +35,21 @@ spring:
       hibernate.format_sql: true
       hibernate.show_sql: true
     open-in-view: false
-
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 1.94.123.205:8848
+        heart-beat-interval: 5000
+        heart-beat-timeout: 20000
+        naming-load-cache-at-start: false
+        namespace: public
+        register-enabled: true
+feign:
+  client:
+    config:
+      default: # 全局配置（也可以指定具体Feign客户端名称）
+        loggerLevel: FULL # 打印完整的请求/响应日志
 logging:
   level:
-    com.broadview.coupon: debug
+    feign.Logger: debug
+    com.geekbang.coupon.customer: debug

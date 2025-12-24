@@ -4,7 +4,7 @@ package com.geekbang.coupon.customer.service;
 import com.geekbang.coupon.calculation.api.beans.ShoppingCart;
 import com.geekbang.coupon.calculation.api.beans.SimulationOrder;
 import com.geekbang.coupon.calculation.api.beans.SimulationResponse;
-import com.geekbang.coupon.calculation.controller.service.intf.CouponCalculationService;
+import com.geekbang.coupon.calculation.feignclient.TemplateClient;
 import com.geekbang.coupon.customer.api.beans.RequestCoupon;
 import com.geekbang.coupon.customer.api.beans.SearchCoupon;
 import com.geekbang.coupon.customer.api.enums.CouponStatus;
@@ -13,7 +13,6 @@ import com.geekbang.coupon.customer.dao.entity.Coupon;
 import com.geekbang.coupon.customer.service.intf.CouponCustomerService;
 import com.geekbang.coupon.template.api.beans.CouponInfo;
 import com.geekbang.coupon.template.api.beans.CouponTemplateInfo;
-import com.geekbang.coupon.template.service.intf.CouponTemplateService;
 import com.google.common.collect.Lists;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
@@ -21,6 +20,7 @@ import org.apache.commons.lang3.BooleanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Example;
 import org.springframework.stereotype.Service;
+import com.geekbang.coupon.calculation.feignclient.CalculatorClient;
 
 import javax.transaction.Transactional;
 import java.util.Calendar;
@@ -37,10 +37,10 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
     private CouponDao couponDao;
 
     @Autowired
-    private CouponTemplateService templateService;
+    private CalculatorClient calculatorClient;
 
     @Autowired
-    private CouponCalculationService calculationService;
+    private TemplateClient templateClient;
 
 
     @Override
@@ -50,26 +50,22 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
         // 高并发场景下不能这么一个个循环，更好的做法是批量查询
         // 而且券模板一旦创建不会改内容，所以在创建端做数据异构放到缓存里，使用端从缓存捞template信息
         for (Long couponId : order.getCouponIDs()) {
-            Coupon example = Coupon.builder()
-                    .userId(order.getUserId())
-                    .id(couponId)
-                    .status(CouponStatus.AVAILABLE)
-                    .build();
-            Optional<Coupon> couponOptional = couponDao.findAll(Example.of(example))
-                    .stream()
-                    .findFirst();
+            Coupon example = Coupon.builder().userId(order.getUserId()).id(couponId).status(CouponStatus.AVAILABLE).build();
+            Optional<Coupon> couponOptional = couponDao.findAll(Example.of(example)).stream().findFirst();
             // 加载优惠券模板信息
             if (couponOptional.isPresent()) {
                 Coupon coupon = couponOptional.get();
                 CouponInfo couponInfo = CouponConverter.convertToCoupon(coupon);
-                couponInfo.setTemplate(templateService.loadTemplateInfo(coupon.getTemplateId()));
+                final CouponTemplateInfo template = templateClient.getTemplate(coupon.getTemplateId());
+                couponInfo.setTemplate(template);
                 couponInfos.add(couponInfo);
             }
         }
         order.setCouponInfos(couponInfos);
 
         // 调用接口试算服务
-        return calculationService.simulateOrder(order);
+        return calculatorClient.simulate(order);
+
     }
 
     /**
@@ -78,11 +74,7 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
     @Override
     public List<CouponInfo> findCoupon(SearchCoupon request) {
         // 在真正的生产环境，这个接口需要做分页查询，并且查询条件要封装成一个类
-        Coupon example = Coupon.builder()
-                .userId(request.getUserId())
-                .status(CouponStatus.convert(request.getCouponStatus()))
-                .shopId(request.getShopId())
-                .build();
+        Coupon example = Coupon.builder().userId(request.getUserId()).status(CouponStatus.convert(request.getCouponStatus())).shopId(request.getShopId()).build();
 
         // 这里你可以尝试实现分页查询
         List<Coupon> coupons = couponDao.findAll(Example.of(example));
@@ -90,15 +82,12 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
             return Lists.newArrayList();
         }
 
-        List<Long> templateIds = coupons.stream()
-                .map(Coupon::getTemplateId)
-                .collect(Collectors.toList());
-        Map<Long, CouponTemplateInfo> templateMap = templateService.getTemplateInfoMap(templateIds);
+        List<Long> templateIds = coupons.stream().map(Coupon::getTemplateId).collect(Collectors.toList());
+
+        Map<Long, CouponTemplateInfo> templateMap = templateClient.getTemplateInfoMap(templateIds);
         coupons.stream().forEach(e -> e.setTemplateInfo(templateMap.get(e.getTemplateId())));
 
-        return coupons.stream()
-                .map(CouponConverter::convertToCoupon)
-                .collect(Collectors.toList());
+        return coupons.stream().map(CouponConverter::convertToCoupon).collect(Collectors.toList());
     }
 
     /**
@@ -106,7 +95,8 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
      */
     @Override
     public Coupon requestCoupon(RequestCoupon request) {
-        CouponTemplateInfo templateInfo = templateService.loadTemplateInfo(request.getCouponTemplateId());
+
+        CouponTemplateInfo templateInfo = templateClient.getTemplate(request.getCouponTemplateId());
 
         // 模板不存在则报错
         if (templateInfo == null) {
@@ -129,12 +119,7 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
             throw new IllegalArgumentException("exceeds maximum number");
         }
 
-        Coupon coupon = Coupon.builder()
-                .templateId(request.getCouponTemplateId())
-                .userId(request.getUserId())
-                .shopId(templateInfo.getShopId())
-                .status(CouponStatus.AVAILABLE)
-                .build();
+        Coupon coupon = Coupon.builder().templateId(request.getCouponTemplateId()).userId(request.getUserId()).shopId(templateInfo.getShopId()).status(CouponStatus.AVAILABLE).build();
         couponDao.save(coupon);
         return coupon;
     }
@@ -150,24 +135,18 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
         Coupon coupon = null;
         if (order.getCouponId() != null) {
             // 如果有优惠券，验证是否可用，并且是当前客户的
-            Coupon example = Coupon.builder()
-                    .userId(order.getUserId())
-                    .id(order.getCouponId())
-                    .status(CouponStatus.AVAILABLE)
-                    .build();
-            coupon = couponDao.findAll(Example.of(example))
-                    .stream()
-                    .findFirst()
+            Coupon example = Coupon.builder().userId(order.getUserId()).id(order.getCouponId()).status(CouponStatus.AVAILABLE).build();
+            coupon = couponDao.findAll(Example.of(example)).stream().findFirst()
                     // 如果找不到券，就抛出异常
                     .orElseThrow(() -> new RuntimeException("Coupon not found"));
 
             CouponInfo couponInfo = CouponConverter.convertToCoupon(coupon);
-            couponInfo.setTemplate(templateService.loadTemplateInfo(coupon.getTemplateId()));
+            couponInfo.setTemplate(templateClient.getTemplate(coupon.getTemplateId()));
             order.setCouponInfos(Lists.newArrayList(couponInfo));
         }
 
         // order清算
-        ShoppingCart checkoutInfo = calculationService.calculateOrderPrice(order);
+        ShoppingCart checkoutInfo = calculatorClient.calculateOrderPrice(order);
 
         if (coupon != null) {
             // 如果优惠券没有被结算掉，而用户传递了优惠券，报错提示该订单满足不了优惠条件
@@ -187,14 +166,8 @@ public class CouponCustomerServiceImpl implements CouponCustomerService {
     // 逻辑删除优惠券
     @Override
     public void deleteCoupon(Long userId, Long couponId) {
-        Coupon example = Coupon.builder()
-                .userId(userId)
-                .id(couponId)
-                .status(CouponStatus.AVAILABLE)
-                .build();
-        Coupon coupon = couponDao.findAll(Example.of(example))
-                .stream()
-                .findFirst()
+        Coupon example = Coupon.builder().userId(userId).id(couponId).status(CouponStatus.AVAILABLE).build();
+        Coupon coupon = couponDao.findAll(Example.of(example)).stream().findFirst()
                 // 如果找不到券，就抛出异常
                 .orElseThrow(() -> new RuntimeException("Could not find available coupon"));
 
